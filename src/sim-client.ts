@@ -1,7 +1,7 @@
 import got from 'got';
 import { CookieJar } from 'tough-cookie';
 import * as cheerio from 'cheerio';
-import { studentResponseSchema, pdfResponseSchema } from './schemas.js';
+import { studentResponseSchema, pdfResponseSchema, type StudentResponse } from './schemas.js';
 
 import type { Got } from 'got';
 import type { Response } from 'got';
@@ -141,9 +141,7 @@ export default class SimClient {
     return studentResponseSchema.parse(response);
   }
 
-  async fetchPdf() {
-    const info = await this.fetchStudentData();
-
+  async fetchPdf(info: StudentResponse) {
     const entityKeys = [
       `Studentnumber='${info.studentId}'`,
       `Studiengang_ID='${info.majorId}'`,
