@@ -1,28 +1,26 @@
 import * as z from 'zod';
 
-export const studentResponseSchema = z
+export const enrolementSchema = z
+  .object({
+    Studiengang_ID: z.coerce.number(),
+    Studentnumber: z.coerce.number(),
+    Studiengaenge: z.string(),
+    Sprache: z.string(),
+  })
+  .transform((r) => ({
+    studentNumber: r.Studentnumber,
+    majorId: r.Studiengang_ID,
+    majorName: r.Studiengaenge,
+    languageCode: r.Sprache,
+  }));
+
+export const enrolementsSchema = z
   .object({
     d: z.object({
-      results: z.array(
-        z.object({
-          Studiengang_ID: z.coerce.number(),
-          Studentnumber: z.coerce.number(),
-          Studiengaenge: z.string(),
-          Sprache: z.string(),
-        })
-      ),
+      results: z.array(enrolementSchema),
     }),
   })
-  .transform((r) => {
-    return r.d.results.map((result) => {
-      const studentId = r.d.results[0]!.Studentnumber;
-      const majorId = r.d.results[0]!.Studiengang_ID;
-      const majorName = r.d.results[0]!.Studiengaenge;
-      const language = r.d.results[0]!.Sprache;
-
-      return { studentId, majorId, majorName, language };
-    });
-  });
+  .transform(r => r.d.results);
 
 export const pdfResponseSchema = z
   .object({
@@ -30,4 +28,5 @@ export const pdfResponseSchema = z
   })
   .transform((r) => r.d.Data);
 
-export type StudentResponse = z.infer<typeof studentResponseSchema>;
+export type Enrolement = z.infer<typeof enrolementSchema>;
+export type Enrolements = z.infer<typeof enrolementsSchema>;

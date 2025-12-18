@@ -1,7 +1,7 @@
 import got from 'got';
 import { CookieJar } from 'tough-cookie';
 import * as cheerio from 'cheerio';
-import { studentResponseSchema, pdfResponseSchema, type StudentResponse } from './schemas.js';
+import { enrolementsSchema, pdfResponseSchema, type Enrolement } from './schemas.js';
 
 import type { Got } from 'got';
 import type { Response } from 'got';
@@ -106,7 +106,7 @@ export default class SimClient {
 
   private perform302Redirect(response: Response<string>) {
     if (response.statusCode !== 302 || !response.headers.location)
-      throw new Error('The response does not contain a valid 302 redirect');
+      throw new Error('The response does not contain a valid 302 redirect.');
 
     const destination = this.toUrl(
       response.headers.location,
@@ -115,7 +115,11 @@ export default class SimClient {
     return this.client.get(destination);
   }
 
-  private performLogin(response: Response<string>) {
+  private wasLoginSuccessfull(response: Response<string>) {
+    return response.statusCode !== 302;
+  }
+
+  private async performLogin(response: Response<string>) {
     const $form = this.loadForm(response);
 
     $form.find('input[id=username]').attr('value', this.credentials.username);
@@ -123,10 +127,15 @@ export default class SimClient {
 
     $form.append('<input type="hidden" name="_eventId_proceed" value="">');
 
-    return this.submitForm($form, response.requestUrl);
+    const loginResponse = await this.submitForm($form, response.requestUrl);
+
+    if(!this.wasLoginSuccessfull(loginResponse))
+      throw new Error('Invalid login credentials.');
+
+    return loginResponse;
   }
 
-  private async fetchStudentData() {
+  async fetchEnrolements(): Promise<Enrolement[]> {
     const url = new URL(this.PDF_SERVICE_PATH, this.baseUrl);
 
     const response = await this.client.get(url, {
@@ -138,15 +147,15 @@ export default class SimClient {
       resolveBodyOnly: true,
     });
 
-    return studentResponseSchema.parse(response);
+    return enrolementsSchema.parse(response);
   }
 
-  async fetchPdf(info: StudentResponse) {
+  async fetchPdf(enrolement: Enrolement) {
     const entityKeys = [
-      `Studentnumber='${info.studentId}'`,
-      `Studiengang_ID='${info.majorId}'`,
-      `Sprache='${info.language}'`,
-      `Studiengaenge='${encodeURIComponent(info.majorName)}'`,
+      `Studentnumber='${enrolement.studentNumber}'`,
+      `Studiengang_ID='${enrolement.majorId}'`,
+      `Sprache='${enrolement.languageCode}'`,
+      `Studiengaenge='${encodeURIComponent(enrolement.majorName)}'`,
     ].join(',');
 
     const relativePathWithKeys = `${this.PDF_SERVICE_PATH}(${entityKeys})`;

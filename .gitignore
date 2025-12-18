@@ -5,3 +5,6 @@ dist
 package-lock.json
 prisma/*.db
 /src/generated/prisma
+*.key
+*.cert
+*.pem

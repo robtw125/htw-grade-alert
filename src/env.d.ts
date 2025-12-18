@@ -1,8 +1,9 @@
 declare global {
   namespace NodeJS {
     interface ProcessEnv {
-      HTW_USERNAME: string;
-      HTW_PASSWORD: string;
+      DATABASE_URL: string,
+      PUSHOVER_API_KEY: string,
+      VERIFICATION_CODE_LIFETIME_MS: number,
     }
   }
 }
