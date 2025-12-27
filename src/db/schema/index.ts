@@ -1,5 +1,5 @@
 import { pgTable, uuid, varchar, boolean, timestamp, integer } from 'drizzle-orm/pg-core';
-import { relations } from 'drizzle-orm';
+import { relations, type InferInsertModel, type InferSelectModel } from 'drizzle-orm';
 
 export const students = pgTable('students', {
   id: uuid('id').defaultRandom().primaryKey(),
@@ -31,3 +31,6 @@ export const verificationCodesRelations = relations(verificationCodes, ({ one })
     references: [students.id],
   }),
 }));
+
+export type InsertStudent = InferInsertModel<typeof students>;
+export type SelectStudent = InferSelectModel<typeof students>;

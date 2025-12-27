@@ -1,8 +1,28 @@
 import { Pool } from 'pg';
 import { drizzle } from 'drizzle-orm/node-postgres';
 
-import { students, verificationCodes } from './schema/index.js';
-import { eq, sql, and, gt, desc, isNull } from 'drizzle-orm';
+import AESService from '../aes-service.js';
+
+import {
+  students,
+  verificationCodes,
+  type InsertStudent,
+} from './schema/index.js';
+import { eq, sql, and, gt, desc, isNull, SQL } from 'drizzle-orm';
+import type { PgTransaction } from 'drizzle-orm/pg-core';
+
+const aesKey = process.env.AES_KEY;
+
+if (!aesKey) {
+  const generatedKey = await AESService.generateKey();
+  console.log(
+    'Please provide a valid aes key as an environment variable. A new key is provided below: \n' +
+      generatedKey
+  );
+  process.exit(0);
+}
+
+const aesService = await AESService.create(process.env.AES_KEY);
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL!,
@@ -21,8 +41,20 @@ function generateSixDigitCode(): string {
   return code;
 }
 
-async function createStudent() {
-  await db.insert(students).values({});
+export async function createStudent(createStudentData: InsertStudent) {
+  const encryptedUsername = await aesService.encrypt(
+    createStudentData.username
+  );
+  const encryptedPassword = await aesService.encrypt(
+    createStudentData.password
+  );
+
+  return db
+    .insert(students)
+    .values({
+      ...createStudentData,
+      ...{ username: encryptedUsername, password: encryptedPassword },
+    }).returning();
 }
 
 export async function createVerificationCode(studentId: string) {
@@ -59,13 +91,24 @@ export async function redeemVerificationCode(
       .limit(1)
       .for('no key update');
 
-    if(!redeemableVerificationCode)
-      throw new Error(`No active code found`);
+    if (!redeemableVerificationCode) throw new Error(`No active code found`);
 
-    if(redeemableVerificationCode.code !== code)
+    if (redeemableVerificationCode.code !== code)
       throw new Error(`Invalid code`);
 
-    await tx.update(verificationCodes).set({ usedAt: sql`now()` }).where(eq(verificationCodes.id, redeemableVerificationCode.id));
-    await tx.update(students).set({ isVerified: true }).where(eq(students.id, studentId));
+    await tx
+      .update(verificationCodes)
+      .set({ usedAt: sql`now()` })
+      .where(eq(verificationCodes.id, redeemableVerificationCode.id));
+    await tx
+      .update(students)
+      .set({ isVerified: true })
+      .where(eq(students.id, studentId));
   });
+}
+
+export async function getStudentsToUpdate(olderThanMs: number, tx?: PgTransaction<any, any, any>) {
+  const executor = tx ?? db;
+
+  
 }

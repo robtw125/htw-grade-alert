@@ -11,7 +11,7 @@ interface LoginCredentials {
   password: string;
 }
 
-export default class SimClient {
+export default class SIMClient {
   private readonly PDF_SERVICE_PATH =
     'sap/opu/odata/sap/YSLCM_BESCHEINIGUNGEN_SRV/LeistungsuebersichtSet';
 

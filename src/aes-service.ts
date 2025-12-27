@@ -18,6 +18,18 @@ export default class AESService {
 
   private constructor(private key: webcrypto.CryptoKey) {}
 
+  public static async generateKey() {
+    const key = await webcrypto.subtle.generateKey({
+      name: 'AES-GCM',
+      length: 256
+    } , true, ['encrypt', 'decrypt']);
+
+    const exported  = await webcrypto.subtle.exportKey('raw', key);
+    const exportedKeyBuffer = Buffer.from(exported);
+
+    return exportedKeyBuffer.toString('base64');
+  }
+
   public async encrypt(plainText: string) {
     const plainTextBuffer = Buffer.from(plainText, 'utf-8');
 
@@ -64,8 +76,3 @@ const key = Buffer.from(
     ])
   )
 ).toString('base64');
-
-const aesService = await AESService.create(key);
-const cipher = await aesService.encrypt('Hallo, Robinho, ÄöüKlöö!');
-console.log(cipher);
-console.log(await aesService.decrypt(cipher));
