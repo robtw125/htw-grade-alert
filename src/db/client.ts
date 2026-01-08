@@ -4,12 +4,20 @@ import { drizzle } from 'drizzle-orm/node-postgres';
 import AESService from '../aes-service.js';
 
 import {
+  majors,
   students,
   verificationCodes,
+  modules,
   type InsertStudent,
+  type SelectStudent,
+  exams,
 } from './schema/index.js';
-import { eq, sql, and, gt, desc, isNull, SQL } from 'drizzle-orm';
+import { eq, sql, and, gt, lt, desc, isNull, or, inArray } from 'drizzle-orm';
 import type { PgTransaction } from 'drizzle-orm/pg-core';
+import type { Module } from '../sim-document.js';
+import type { Enrolement } from '../schemas.js';
+
+import * as schema from './schema/index.js';
 
 const aesKey = process.env.AES_KEY;
 
@@ -28,7 +36,7 @@ const pool = new Pool({
   connectionString: process.env.DATABASE_URL!,
 });
 
-const db = drizzle({ client: pool });
+const db = drizzle({ client: pool, schema });
 
 const codeLifetimeMs = process.env.VERIFICATION_CODE_LIFETIME_MS ?? 60_000;
 
@@ -54,7 +62,8 @@ export async function createStudent(createStudentData: InsertStudent) {
     .values({
       ...createStudentData,
       ...{ username: encryptedUsername, password: encryptedPassword },
-    }).returning();
+    })
+    .returning();
 }
 
 export async function createVerificationCode(studentId: string) {
@@ -107,8 +116,90 @@ export async function redeemVerificationCode(
   });
 }
 
-export async function getStudentsToUpdate(olderThanMs: number, tx?: PgTransaction<any, any, any>) {
-  const executor = tx ?? db;
+export async function claimOutdatedStudents(
+  batchSize: number,
+  olderThanMs: number,
+  claimDurationMs: number
+): Promise<SelectStudent[]> {
+  return db.transaction(async (tx) => {
+    const outdatedStudents = await tx
+      .select()
+      .from(students)
+      .where(
+        and(
+          or(
+            isNull(students.fetchedAt),
+            lt(
+              students.fetchedAt,
+              sql`now() - ${olderThanMs} * interval '1 millisecond'`
+            )
+          ),
+          or(
+            isNull(students.claimedAt),
+            lt(students.claimedAt, students.fetchedAt),
+            lt(
+              students.claimedAt,
+              sql`now() - ${claimDurationMs} * interval '1 millisecond'`
+            )
+          )
+        )
+      )
+      .orderBy(sql`${students.fetchedAt} ASC NULLS FIRST`)
+      .limit(batchSize)
+      .for('no key update', { skipLocked: true });
 
-  
+    if (outdatedStudents.length === 0) return [];
+
+    const studentIds = outdatedStudents.map((s) => s.id);
+    const finalStudents = await tx
+      .update(students)
+      .set({ claimedAt: sql`now()` })
+      .where(inArray(students.id, studentIds))
+      .returning();
+
+    return Promise.all(
+      finalStudents.map(async (s) => {
+        const decryptedUsername = await aesService.decrypt(s.username);
+        const decryptedPassword = await aesService.decrypt(s.password);
+
+        return {
+          ...s,
+          ...{ username: decryptedUsername, password: decryptedPassword },
+        };
+      })
+    );
+  });
 }
+
+export async function deltaExists(
+  student: SelectStudent,
+  enrolement: Enrolement,
+  mods: Module[],
+  provisionalGrade: number
+) {
+  const major = await db
+    .selectDistinct()
+    .from(majors)
+    .where(eq(majors.id, enrolement.majorId));
+
+  if (!major) return true;
+
+  const moduleIds = mods.map((m) => m.id);
+
+  const foundModules = await db.query.modules.findMany({
+    where: (module, { and, eq }) =>
+      and(
+        eq(module.majorId, enrolement.majorId)
+      ),
+    with: {
+      exams: true,
+    },
+  });
+
+  foundModules[0]!.exams.
+}
+
+export async function updateGrades(
+  modules: Module[],
+  provisionalGrade: number
+) {}

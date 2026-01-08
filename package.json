@@ -6,7 +6,8 @@
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "build": "tsc",
-    "start": "tsx ./src/app.ts"
+    "start": "tsx ./src/app.ts",
+    "cli": "tsx ./src/cli.ts"
   },
   "keywords": [],
   "author": "",

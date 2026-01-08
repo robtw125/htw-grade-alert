@@ -1,7 +1,5 @@
 import { getDocument } from 'pdfjs-dist/legacy/build/pdf.mjs';
 import type { PDFDocumentProxy } from 'pdfjs-dist/legacy/build/pdf.mjs';
-import type { TextItem } from 'pdfjs-dist/types/src/display/api.js';
-import { startsWith } from 'zod';
 
 interface TextBlock {
   text: string;
@@ -15,7 +13,8 @@ interface Exam {
   grade: string,
 }
 
-interface Module {
+export interface Module {
+  id: number;
   name: string,
   semester: string,
   cp: number,
@@ -61,6 +60,17 @@ export default class SIMDocument {
     return new Date(year, month, day);
   }
 
+private seperateIdFromName(text: string) {
+    const pattern = /\[\w+-(\d+)\]\s+(.+)/;
+    
+    const match = text.match(pattern);
+
+    return {
+        id: parseInt(match![1]!),
+        name: match![2]!
+      };
+  }
+
   public async extractModules() {
     const lines = await this.getLines();
     const modules: Module[] = [];
@@ -76,7 +86,7 @@ export default class SIMDocument {
         if(line.length < 4)
           continue;
 
-        const name = line[0]!;
+        const { id, name } = this.seperateIdFromName(line[0]!);
         const semester = line[1]!;
         const cp = line[2]!;
         const grade = line[3]!;
@@ -84,13 +94,13 @@ export default class SIMDocument {
         if(module)
           modules.push(module);
 
-        module = { name, semester, cp: parseInt(cp), grade, exams: []}
+        module = { id, name, semester, cp: parseInt(cp), grade, exams: []}
       } else {
         if(!module) continue;
 
         if(line.length < 3) continue;
 
-        const name = line[0]!;
+        const { id, name } = this.seperateIdFromName(line[0]!);
         const date = line[1]!;
         const grade = line[2]!;
 
