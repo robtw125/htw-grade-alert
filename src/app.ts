@@ -11,8 +11,8 @@ import SIMDocument from "./document.js";
 import PushoverClient from "./pushover-client.js";
 
 const BATCH_SIZE = 10;
-const UPDATE_INTERVAL_MS = 0;
-const CLAIM_DURATION = 0;
+const UPDATE_INTERVAL_MS = process.env.UPDATE_INTERVAL;
+const CLAIM_DURATION = process.env.CLAIM_DURATION;
 
 const pushoverClient = new PushoverClient(
   "https://api.pushover.net/1/",
