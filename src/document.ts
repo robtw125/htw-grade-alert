@@ -1,8 +1,9 @@
-import { getDocument } from 'pdfjs-dist/legacy/build/pdf.mjs';
-import type { PDFDocumentProxy } from 'pdfjs-dist/legacy/build/pdf.mjs';
+import { getDocument } from "pdfjs-dist/legacy/build/pdf.mjs";
+import type { PDFDocumentProxy } from "pdfjs-dist/legacy/build/pdf.mjs";
 
-import type { TextItem } from 'pdfjs-dist/types/src/display/api.js';
-import * as z from 'zod'
+import type { TextItem } from "pdfjs-dist/types/src/display/api.js";
+import type { ModuleStatus } from "./db/schema/index.js";
+import * as z from "zod";
 
 interface TextElement {
   content: string;
@@ -20,7 +21,7 @@ export interface Module {
   name: string;
   semester: string;
   cp: number;
-  passed: boolean;
+  status: ModuleStatus;
   grade: number | null;
   exams: Exam[];
 }
@@ -35,8 +36,8 @@ export interface Exam {
 type Transform = [number, number, number, number, number, number];
 
 function assertArrayIsTransform(array: any[]): asserts array is Transform {
-  if (array.length !== 6 || array.some((v) => typeof v !== 'number'))
-    throw new Error('Invalid PDF transform matrix: Expected 6 numbers');
+  if (array.length !== 6 || array.some((v) => typeof v !== "number"))
+    throw new Error("Invalid PDF transform matrix: Expected 6 numbers");
 }
 
 export default class SIMDocument {
@@ -44,7 +45,7 @@ export default class SIMDocument {
 
   private static patterns = {
     TITLE: /^\[\w+-(?<code>\d+)] (?<name>.*)/,
-    DATE_STRING: /^(?<day>\d{2})\/(?<month>\d{2})\/(?<year>\d{4})$/,
+    DATE_STRING: /^(?<day>\d{2})[\/\.](?<month>\d{2})[\/\.](?<year>\d{4})$/,
     SEMESTER: /(?:WiSe|SoSe) \d{4}/,
     CP: /^\d{1,2}$/,
     GRADE_OR_PERCENTAGE: /\d{1,2},\d{1,2}/,
@@ -62,6 +63,7 @@ export default class SIMDocument {
 
   private constructor(private pdf: PDFDocumentProxy) {}
 
+  //TODO: include the page number into the yPosition
   private mapToTextElement(textItem: TextItem): TextElement {
     assertArrayIsTransform(textItem.transform);
 
@@ -87,9 +89,9 @@ export default class SIMDocument {
     });
 
     return items
-      .filter((i) => 'str' in i)
+      .filter((i) => "str" in i)
       .map((i) => this.mapToTextElement(i))
-      .filter((e) => e.content !== '');
+      .filter((e) => e.content !== "");
   }
 
   private sortTextElements(elements: TextElement[]): TextElement[] {
@@ -132,7 +134,7 @@ export default class SIMDocument {
   }
 
   private getTitleElement(line: Line) {
-    return line.find(e => SIMDocument.patterns.TITLE.test(e.content));
+    return line.find((e) => SIMDocument.patterns.TITLE.test(e.content));
   }
 
   private async getLines(): Promise<Line[]> {
@@ -147,54 +149,204 @@ export default class SIMDocument {
     return lines;
   }
 
+  private static parseGermanFloat(text: string) {
+    return parseFloat(text.replace(",", "."));
+  }
+
+  private static parseGermanDateString(text: string): Date | null {
+    const match = text.match(SIMDocument.patterns.DATE_STRING);
+
+    if (!match?.groups) return null;
+
+    const year = parseInt(match.groups.year!, 10);
+    const month = parseInt(match.groups.month!, 10) - 1;
+    const day = parseInt(match.groups.day!, 10);
+
+    const date = new Date(year, month, day);
+
+    return isNaN(date.getTime()) ? null : date;
+  }
+
+  //TODO: refactor this hot mess
   public async parse() {
     const lines = await this.getGradeRelevantLines();
 
-    for(const line of lines) {
-      const titleElement = this.getTitleElement(line)
+    const modules = [];
 
-      if(!titleElement) continue;
+    let currentModule: Module | null = null;
+    let exams: Exam[] = [];
 
-      const { code, name } = this.parseTitle(titleElement.content);
+    for (const line of lines) {
+      const title = SIMDocument.getTextMatchOfLine(
+        line,
+        SIMDocument.patterns.TITLE
+      );
 
-      if(!(code && name)) continue;
+      if (!title) continue;
+
+      const { code, name } = this.parseTitle(title);
+
+      if (!(code && name)) continue;
+
+      const semester = SIMDocument.getTextMatchOfLine(
+        line,
+        SIMDocument.patterns.SEMESTER
+      );
+
+      const gradeOrPercentage = SIMDocument.getTextMatchOfLine(
+        line,
+        SIMDocument.patterns.GRADE_OR_PERCENTAGE
+      );
+      const passed = SIMDocument.getTextMatchOfLine(
+        line,
+        SIMDocument.patterns.PASSED
+      );
+      const notPassed = SIMDocument.getTextMatchOfLine(
+        line,
+        SIMDocument.patterns.NOT_PASSED
+      );
+
+      const isGraded = gradeOrPercentage || passed || notPassed ? true : false;
+
+      const isModule = semester ? true : false;
+
+      if (isModule) {
+        if (currentModule) {
+          let cmGraded = currentModule.status != "in_progress";
+
+          if ((cmGraded && exams.length > 1) || (!cmGraded && exams.length > 0))
+            currentModule.exams = exams;
+
+          if (cmGraded || (!cmGraded && exams.length > 0))
+            modules.push(currentModule);
+        }
+
+        exams = [];
+
+        if (!semester) {
+          currentModule = null;
+          continue;
+        }
+
+        const cp = parseFloat(
+          SIMDocument.getTextMatchOfLine(line, SIMDocument.patterns.CP) ?? "0"
+        );
+
+        let status: ModuleStatus = "in_progress";
+
+        if (passed || gradeOrPercentage) {
+          status = "passed";
+        } else {
+          if (notPassed) {
+            status = "failed";
+          }
+        }
+
+        currentModule = {
+          code: code,
+          name: name,
+          semester: semester,
+          cp,
+          status,
+          grade: gradeOrPercentage
+            ? SIMDocument.parseGermanFloat(gradeOrPercentage)
+            : null,
+          exams: [],
+        };
+      } else {
+        if (!isGraded || !currentModule || currentModule.code != code) continue;
+
+        const dateString = SIMDocument.getTextMatchOfLine(
+          line,
+          SIMDocument.patterns.DATE_STRING
+        );
+
+        if (!dateString) continue;
+
+        const date = SIMDocument.parseGermanDateString(dateString);
+
+        if (!date) continue;
+
+        let exam = {
+          name,
+          date,
+          passed: passed || gradeOrPercentage ? true : false,
+          percentage: gradeOrPercentage
+            ? SIMDocument.parseGermanFloat(gradeOrPercentage)
+            : null,
+        };
+
+        exams.push(exam);
+      }
     }
+
+    if (currentModule) {
+      let cmGraded = currentModule.status != "in_progress";
+
+      if ((cmGraded && exams.length > 1) || (!cmGraded && exams.length > 0))
+        currentModule.exams = exams;
+
+      if (cmGraded || (!cmGraded && exams.length > 0))
+        modules.push(currentModule);
+    }
+
+    return modules;
+  }
+
+  private static getTextMatchOfLine(
+    line: Line,
+    pattern: RegExp
+  ): string | null {
+    const textElement = line.find((e) => pattern.test(e.content));
+    return textElement?.content ?? null;
   }
 
   parseTitle(title: string) {
     const match = SIMDocument.patterns.TITLE.exec(title);
 
-    if(!match?.groups)
-      throw new Error('Invalid title!');
+    if (!match?.groups) throw new Error("Invalid title!");
 
     const { code, name } = match.groups;
-    return { code, name };
+
+    if (!code || !name) return { code: null, name: null };
+
+    return { code: parseFloat(code), name };
   }
 
+  //TODO: check for y-diff (max)
+  //needs another way to append text, since this is invalidating the position on the TextElement
   public async getGradeRelevantLines() {
     const totalLines = await this.getLines();
     const relevantLines: Line[] = [];
-    
+
     let currentTitleElement: TextElement | null = null;
 
-    for(const line of totalLines) {
-      const titleElement = line.find(e => SIMDocument.patterns.TITLE.test(e.content));
+    for (const line of totalLines) {
+      const titleElement = line.find((e) =>
+        SIMDocument.patterns.TITLE.test(e.content)
+      );
 
-      if(titleElement) {
+      if (titleElement) {
         currentTitleElement = titleElement;
         relevantLines.push(line);
         continue;
       } else {
-        if(!currentTitleElement || line.length !== 1) continue;
+        if (!currentTitleElement || line.length !== 1) continue;
         const { name } = this.parseTitle(currentTitleElement.content);
 
-        if(!name) continue;
+        if (!name) continue;
 
         const overhangElement = line[0];
 
-        if(!overhangElement || overhangElement.fontSize != currentTitleElement.fontSize || overhangElement.content.includes(name) || overhangElement.position.x !== currentTitleElement.position.x) continue;
+        if (
+          !overhangElement ||
+          overhangElement.fontSize != currentTitleElement.fontSize ||
+          overhangElement.content.includes(name) ||
+          overhangElement.position.x !== currentTitleElement.position.x
+        )
+          continue;
 
-        currentTitleElement.content += ' ' + overhangElement.content;
+        currentTitleElement.content += " " + overhangElement.content;
       }
     }
 

@@ -154,7 +154,8 @@ export default class SIMClient {
     const entityKeys = [
       `Studentnumber='${enrolement.studentNumber}'`,
       `Studiengang_ID='${enrolement.majorId}'`,
-      `Sprache='${enrolement.languageCode}'`,
+      //`Sprache='${enrolement.languageCode}'`,
+      `Sprache='DE'`,
       `Studiengaenge='${encodeURIComponent(enrolement.majorName)}'`,
     ].join(',');
 

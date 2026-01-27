@@ -1,5 +1,6 @@
 import {
   pgTable,
+  pgEnum,
   uuid,
   varchar,
   boolean,
@@ -12,6 +13,7 @@ import {
 } from 'drizzle-orm/pg-core';
 import {
   relations,
+  type InferEnum,
   type InferInsertModel,
   type InferSelectModel,
 } from 'drizzle-orm';
@@ -44,6 +46,8 @@ export const modules = pgTable('modules', {
   unique().on(t.majorId, t.code)
 ]);
 
+export const moduleStatus = pgEnum('module_status', ['in_progress', 'passed', 'failed']);
+
 export const moduleResults = pgTable(
   'module_results',
   {
@@ -56,7 +60,7 @@ export const moduleResults = pgTable(
     semester: varchar('semester').notNull(),
     cp: integer('cp').notNull(),
     grade: doublePrecision('grade'),
-    passed: boolean('passed').notNull(),
+    status: moduleStatus('passed').notNull(),
   },
   (t) => [primaryKey({ columns: [t.moduleId, t.studentId] })]
 );
@@ -161,3 +165,4 @@ export const verificationCodesRelations = relations(
 
 export type InsertStudent = InferInsertModel<typeof students>;
 export type SelectStudent = InferSelectModel<typeof students>;
+export type ModuleStatus = InferEnum<typeof moduleStatus>;

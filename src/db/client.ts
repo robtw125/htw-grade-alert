@@ -2,19 +2,21 @@ import { Pool } from 'pg';
 import { drizzle } from 'drizzle-orm/node-postgres';
 
 import AESService from '../aes-service.js';
+import type { Exam, Module } from '../document.js';
 
 import {
   majors,
   students,
   verificationCodes,
   modules,
+  moduleResults,
+  examResults,
   type InsertStudent,
   type SelectStudent,
   exams,
 } from './schema/index.js';
 import { eq, sql, and, gt, lt, desc, isNull, or, inArray } from 'drizzle-orm';
 import type { PgTransaction } from 'drizzle-orm/pg-core';
-import type { Module } from '../sim-document.js';
 import type { Enrolement } from '../schemas.js';
 
 import * as schema from './schema/index.js';
@@ -171,35 +173,170 @@ export async function claimOutdatedStudents(
   });
 }
 
-export async function deltaExists(
-  student: SelectStudent,
-  enrolement: Enrolement,
-  mods: Module[],
-  provisionalGrade: number
-) {
-  const major = await db
-    .selectDistinct()
-    .from(majors)
-    .where(eq(majors.id, enrolement.majorId));
-
-  if (!major) return true;
-
-  const moduleIds = mods.map((m) => m.id);
-
-  const foundModules = await db.query.modules.findMany({
-    where: (module, { and, eq }) =>
-      and(
-        eq(module.majorId, enrolement.majorId)
-      ),
+export async function getModuleDelta(scrapedModules: Module[], studentId: string) {
+  const existingResults = await db.query.moduleResults.findMany({
+    where: (moduleResults, { eq }) => eq(moduleResults.studentId, studentId),
     with: {
-      exams: true,
+      module: true
     },
   });
 
-  foundModules[0]!.exams.
+  const delta: Module[] = [];
+
+  for (const scraped of scrapedModules) {
+    const existing = existingResults.find(r => r.module.code === scraped.code);
+
+    if (!existing) {
+      delta.push(scraped);
+      continue;
+    }
+
+    const hasStatusChanged = existing.status !== scraped.status;
+    const hasGradeChanged = existing.grade !== scraped.grade;
+
+    if (hasStatusChanged || hasGradeChanged) {
+      delta.push(scraped);
+    }
+  }
+
+  return delta;
 }
 
-export async function updateGrades(
-  modules: Module[],
-  provisionalGrade: number
-) {}
+export async function getExamDelta(scrapedModules: Module[], studentId: string) {
+  const existingExamResults = await db.query.examResults.findMany({
+    where: (examResults, { eq }) => eq(examResults.studentId, studentId),
+    with: {
+      exam: {
+        with: {
+          module: true
+        }
+      }
+    }
+  });
+
+  const changedExams: Exam[] = [];
+
+  for (const mod of scrapedModules) {
+    for (const scrapedExam of mod.exams) {
+      const existing = existingExamResults.find(r => 
+        r.exam.module.code === mod.code && 
+        r.exam.name === scrapedExam.name
+      );
+
+      if (!existing) {
+        changedExams.push(scrapedExam);
+        continue;
+      }
+
+      const hasPercentageChanged = existing.percentage !== scrapedExam.percentage;
+      const hasPassedChanged = existing.passed !== scrapedExam.passed;
+
+      if (hasPercentageChanged || hasPassedChanged) {
+        changedExams.push(scrapedExam);
+      }
+    }
+  }
+
+  return changedExams;
+}
+
+export async function syncStudentData(
+  scrapedModules: Module[],
+  studentId: string,
+  majorId: number,
+  majorName: string
+) {
+  return await db.transaction(async (tx) => {
+    await tx
+      .insert(majors)
+      .values({
+        id: majorId,
+        name: majorName,
+      })
+      .onConflictDoUpdate({
+        target: majors.id,
+        set: { name: majorName },
+      });
+
+    for (const sModule of scrapedModules) {
+      const [dbModule] = await tx
+        .insert(modules)
+        .values({
+          majorId,
+          code: sModule.code,
+          name: sModule.name,
+        })
+        .onConflictDoUpdate({
+          target: [modules.majorId, modules.code],
+          set: { name: sModule.name },
+        })
+        .returning();
+
+      if (!dbModule) continue;
+
+      await tx
+        .insert(moduleResults)
+        .values({
+          moduleId: dbModule.id,
+          studentId,
+          semester: sModule.semester,
+          cp: sModule.cp,
+          grade: sModule.grade,
+          status: sModule.status,
+        })
+        .onConflictDoUpdate({
+          target: [moduleResults.moduleId, moduleResults.studentId],
+          set: {
+            grade: sModule.grade,
+            status: sModule.status,
+            semester: sModule.semester,
+            cp: sModule.cp,
+          },
+        });
+
+      for (const sExam of sModule.exams) {
+        const [dbExam] = await tx
+          .insert(exams)
+          .values({
+            moduleId: dbModule.id,
+            name: sExam.name,
+          })
+          .onConflictDoUpdate({
+            target: [exams.moduleId, exams.name],
+            set: { name: sExam.name },
+          })
+          .returning();
+
+        if (!dbExam) continue;
+
+        const dateString = sExam.date.toISOString().split("T")[0] as string;
+
+        await tx
+          .insert(examResults)
+          .values({
+            examId: dbExam.id,
+            studentId: studentId,
+            date: dateString,
+            percentage: sExam.percentage,
+            passed: sExam.passed,
+          })
+          .onConflictDoUpdate({
+            target: [examResults.examId, examResults.studentId],
+            set: {
+              percentage: sExam.percentage,
+              passed: sExam.passed,
+              date: dateString,
+            },
+          });
+      }
+    }
+
+    await tx
+      .update(students)
+      .set({
+        fetchedAt: sql`now()`,
+        claimedAt: null,
+      })
+      .where(eq(students.id, studentId));
+  });
+}
